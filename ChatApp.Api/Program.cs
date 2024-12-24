@@ -5,6 +5,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using ChatApp.Api.Hubs;
+using FluentValidation.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,8 +24,6 @@ builder.Services.AddIdentity<User, IdentityRole>()
 // Load JWT settings from appsettings.json
 var jwtSettings = builder.Configuration.GetSection("JWT");
 var secretKey = jwtSettings["Secret"]; // Ensure this matches the value in appsettings.json
-var validIssuer = jwtSettings["ValidIssuer"];
-var validAudience = jwtSettings["ValidAudience"];
 
 // Configure JWT Authentication
 builder.Services.AddAuthentication(options =>
@@ -39,9 +39,27 @@ builder.Services.AddAuthentication(options =>
     {
         ValidateIssuer = true,
         ValidateAudience = true,
-        ValidIssuer = validIssuer,
-        ValidAudience = validAudience,
+        ValidIssuer = jwtSettings["ValidIssuer"],
+        ValidAudience = jwtSettings["ValidAudience"],
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
+    };
+
+    options.Events = new JwtBearerEvents
+    {
+    OnMessageReceived = context =>
+    {
+        var accessToken = context.Request.Query["access_token"];
+
+        // If the request is for the hub...
+        var path = context.HttpContext.Request.Path;
+        if (!string.IsNullOrEmpty(accessToken) &&
+            (path.StartsWithSegments("/chathub")))
+        {
+            // Read the token out of the query string
+            context.Token = accessToken;
+        }
+        return Task.CompletedTask;
+    }
     };
 });
 
@@ -51,11 +69,12 @@ builder.Services.AddControllers()
         options.SerializerSettings.ReferenceLoopHandling = Newtonsoft.Json.ReferenceLoopHandling.Ignore
     );
 
+builder.Services.AddSignalR();
+
 // Add Swagger for API documentation
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Allow CORS (adjust policies as needed)
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll",
@@ -67,7 +86,6 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -80,5 +98,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<ChatHub>("/chathub");
+
 
 app.Run();
